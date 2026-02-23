@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>WatchOn</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" 
+        integrity="sha512-SnH5WK+bZxgPHs44uWIX+LLJAJ9/2PkPKZ5QiAj6Ta86w+fsb2TkcmfRyVX3pBnMFcV7oQPJkl9QevSCWr3W6A==" 
+        crossorigin="anonymous" referrerpolicy="no-referrer" />
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+    import { getDatabase, ref, get } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDnB8yCYQpY0Ovdc0dNMUKjkdzBknRyM6E",
+      authDomain: "watchon-dbc6a.firebaseapp.com",
+      databaseURL: "https://watchon-dbc6a-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "watchon-dbc6a",
+      storageBucket: "watchon-dbc6a.firebasestorage.app",
+      messagingSenderId: "461807442095",
+      appId: "1:461807442095:web:0d829ab3ce87823a54dc5a"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+
+    window.db = db;
+    window.ref = ref;
+    window.get = get;
+
+    const postsRef = ref(db, 'posts');
+
+    let currentPage = 1;
+    const perPage = 12;
+    let selectedCategory = 'All';
+    let allContent = [];
+    let lastFetchTime = 0;
+    const CACHE_DURATION = 10 * 60 * 1000; // 10 minutes
+
+    function showMessage(text, isError = false) {
+      const msgEl = document.getElementById('status-message');
+      msgEl.textContent = text;
+      msgEl.className = isError 
+        ? 'block text-red-400 bg-red-950/40 border border-red-700 p-4 rounded-lg my-6 text-center'
+        : 'block text-green-400 bg-green-950/40 border border-green-700 p-4 rounded-lg my-6 text-center';
+      setTimeout(() => msgEl.classList.add('hidden'), 5000);
+    }
+
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.getElementById('overlay');
+      
+      sidebar.classList.toggle('-translate-x-full');
+      if (sidebar.classList.contains('-translate-x-full')) {
+        overlay.classList.remove('opacity-100', 'pointer-events-auto');
+        overlay.classList.add('opacity-0', 'pointer-events-none');
+      } else {
+        overlay.classList.remove('opacity-0', 'pointer-events-none');
+        overlay.classList.add('opacity-100', 'pointer-events-auto');
+      }
+    }
+
+    function openSearchOverlay() {
+      document.getElementById('search-overlay').classList.remove('hidden');
+      document.getElementById('search-overlay').classList.add('flex');
+      document.getElementById('search-input').focus();
+    }
+
+    function closeSearchOverlay() {
+      document.getElementById('search-overlay').classList.add('hidden');
+      document.getElementById('search-overlay').classList.remove('flex');
+    }
+
+    function setActiveCategory(category) {
+      selectedCategory = category;
+      currentPage = 1;
+      
+      document.querySelectorAll('[data-category]').forEach(el => {
+        const isActive = el.dataset.category === category;
+        el.classList.toggle('bg-pink-600', isActive);
+        el.classList.toggle('text-white', isActive);
+        el.classList.toggle('bg-gray-800', !isActive);
+      });
+      
+      renderContent();
+      if (window.innerWidth < 768) toggleSidebar();
+    }
+
+    function getEmbedUrl(url) {
+      try {
+        const parsed = new URL(url.trim());
+        if (parsed.hostname.includes('youtube.com') || parsed.hostname.includes('youtu.be')) {
+          let videoId = parsed.searchParams.get('v') || url.split('/').pop().split('?')[0];
+          return `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1`;
+        }
+        return url.trim();
+      } catch {
+        return url.trim();
+      }
+    }
+
+    async function renderContent(searchQuery = '') {
+      const grid = document.getElementById('content-grid');
+      grid.innerHTML = '<div class="col-span-full py-16 text-center text-gray-400">Loading...</div>';
+
+      try {
+        const now = Date.now();
+        if (allContent.length === 0 || now - lastFetchTime > CACHE_DURATION) {
+          const snapshot = await get(postsRef);
+          allContent = snapshot.exists() 
+            ? Object.entries(snapshot.val()).map(([id, data]) => ({ id, ...data }))
+            : [];
+          allContent.sort((a, b) => (b.added || '0').localeCompare(a.added || '0'));
+          lastFetchTime = now;
+        }
+
+        let filtered = allContent;
+        if (selectedCategory !== 'All') {
+          filtered = filtered.filter(item => item.category === selectedCategory);
+        }
+        if (searchQuery) {
+          const term = searchQuery.toLowerCase();
+          filtered = filtered.filter(item => 
+            (item.title || '').toLowerCase().includes(term) ||
+            (item.description || '').toLowerCase().includes(term)
+          );
+        }
+
+        const totalItems = filtered.length;
+        const startIndex = (currentPage - 1) * perPage;
+        const pageItems = filtered.slice(startIndex, startIndex + perPage);
+
+        grid.innerHTML = pageItems.length === 0 
+          ? '<div class="col-span-full py-16 text-center text-gray-400">No content found</div>'
+          : '';
+
+        pageItems.forEach(item => {
+          const card = document.createElement('div');
+          card.className = 'group bg-gray-900 rounded-xl overflow-hidden shadow-lg hover:shadow-2xl transition-all relative cursor-pointer';
+          
+          const descriptionHtml = item.description 
+            ? `<p class="text-sm text-gray-400 line-clamp-2">${item.description}</p>` 
+            : '';
+          
+          card.innerHTML = `
+            <div class="relative pt-[133%] bg-gray-950 overflow-hidden">
+              <img src="${item.poster || 'https://via.placeholder.com/300x400?text=No+Poster'}" 
+                   loading="lazy" 
+                   class="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-500">
+              <div class="absolute bottom-2 left-2 bg-black/70 text-xs px-2.5 py-1 rounded-full flex items-center gap-1.5">
+                <i class="fas fa-tag"></i> ${item.category || 'Uncategorized'}
+              </div>
+            </div>
+            <div class="p-4">
+              <div class="font-medium line-clamp-2 mb-1">${item.title || 'Untitled'}</div>
+              ${descriptionHtml}
+            </div>
+          `;
+          card.onclick = () => item.link && openVideo(item.link, item.title);
+          grid.appendChild(card);
+        });
+
+        renderPagination(totalItems, searchQuery);
+      } catch (err) {
+        console.error("Render error:", err);
+        grid.innerHTML = '<div class="col-span-full py-16 text-center text-red-400">Failed to load content</div>';
+      }
+    }
+
+    function renderPagination(total, search = '') {
+      const container = document.getElementById('pagination');
+      container.innerHTML = '';
+      const totalPages = Math.ceil(total / perPage);
+      if (totalPages <= 1) return;
+
+      const prevBtn = document.createElement('button');
+      prevBtn.className = 'px-6 py-2.5 bg-gray-800 rounded disabled:opacity-50';
+      prevBtn.disabled = currentPage <= 1;
+      prevBtn.textContent = 'Prev';
+      prevBtn.onclick = () => { if (currentPage > 1) { currentPage--; renderContent(search); } };
+      container.appendChild(prevBtn);
+
+      for (let i = 1; i <= totalPages; i++) {
+        const pageBtn = document.createElement('button');
+        pageBtn.className = `px-6 py-2.5 rounded ${i === currentPage ? 'bg-pink-600 text-white' : 'bg-gray-800'}`;
+        pageBtn.textContent = i;
+        pageBtn.onclick = () => { currentPage = i; renderContent(search); };
+        container.appendChild(pageBtn);
+      }
+
+      const nextBtn = document.createElement('button');
+      nextBtn.className = 'px-6 py-2.5 bg-gray-800 rounded disabled:opacity-50';
+      nextBtn.disabled = currentPage >= totalPages;
+      nextBtn.textContent = 'Next';
+      nextBtn.onclick = () => { if (currentPage < totalPages) { currentPage++; renderContent(search); } };
+      container.appendChild(nextBtn);
+    }
+
+    async function initializeCategoryButtons() {
+      const container = document.getElementById('category-filters');
+      const sidebarContainer = document.getElementById('sidebar-categories');
+
+      container.innerHTML = '<button class="px-6 py-2.5 bg-pink-600 text-white rounded-full font-medium" data-category="All">All</button>';
+      sidebarContainer.innerHTML = '<li><a class="cat-item block py-2.5 px-3 rounded hover:bg-gray-800 cursor-pointer" data-category="All"><i class="fas fa-list-ul w-5 mr-3"></i>All</a></li>';
+
+      try {
+        const snapshot = await get(ref(db, 'categories'));
+        if (snapshot.exists()) {
+          const categories = snapshot.val();
+          Object.keys(categories).forEach(key => {
+            const name = categories[key];
+            if (name?.trim()) {
+              container.innerHTML += `
+                <button class="px-6 py-2.5 bg-gray-800 hover:bg-gray-700 text-white rounded-full font-medium transition" data-category="${name}">
+                  ${name}
+                </button>`;
+
+              sidebarContainer.innerHTML += `
+                <li><a class="cat-item block py-2.5 px-3 rounded hover:bg-gray-800 cursor-pointer" data-category="\( {name}"><i class="fas fa-tag w-5 mr-3"></i> \){name}</a></li>`;
+            }
+          });
+        }
+      } catch (err) {
+        console.error("Category buttons init failed:", err);
+      }
+    }
+
+    window.openVideo = function(url, title) {
+      document.getElementById('video-title').textContent = title || "Now Playing";
+      document.getElementById('video-player').innerHTML = `<iframe src="${getEmbedUrl(url)}" frameborder="0" allowfullscreen class="w-full h-full"></iframe>`;
+      document.getElementById('video-modal').classList.remove('hidden');
+      document.getElementById('video-modal').classList.add('flex');
+    };
+
+    window.closeVideoModal = function() {
+      document.getElementById('video-modal').classList.add('hidden');
+      document.getElementById('video-modal').classList.remove('flex');
+      document.getElementById('video-player').innerHTML = '';
+    };
+
+    initializeCategoryButtons();
+    renderContent();
+
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('sidebar-toggle').addEventListener('click', toggleSidebar);
+      document.getElementById('search-toggle').addEventListener('click', openSearchOverlay);
+      document.getElementById('overlay').addEventListener('click', toggleSidebar);
+
+      window.toggleSidebar = toggleSidebar;
+      window.closeSearchOverlay = closeSearchOverlay;
+
+      document.addEventListener('click', e => {
+        const categoryBtn = e.target.closest('[data-category]');
+        if (categoryBtn) setActiveCategory(categoryBtn.dataset.category);
+      });
+
+      document.getElementById('search-input').addEventListener('input', e => {
+        currentPage = 1;
+        renderContent(e.target.value.trim());
+      });
+
+      document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') {
+          if (document.getElementById('search-overlay').classList.contains('flex')) closeSearchOverlay();
+          if (document.getElementById('video-modal').classList.contains('flex')) closeVideoModal();
+        }
+      });
+    });
+  </script>
+</head>
+<body class="bg-gray-950 text-gray-200 min-h-screen">
+
+<!-- Top Navigation -->
+<nav class="sticky top-0 z-50 bg-gray-900/90 backdrop-blur border-b border-gray-800 px-4 py-3 flex items-center justify-between">
+  <button id="sidebar-toggle" class="text-2xl hover:text-pink-500 transition-colors">
+    <i class="fas fa-bars"></i>
+  </button>
+  <h1 class="text-2xl font-bold text-pink-600">WatchOn</h1>
+  <button id="search-toggle" class="text-2xl hover:text-pink-500 transition-colors">
+    <i class="fas fa-search"></i>
+  </button>
+</nav>
+
+<!-- Sidebar -->
+<aside id="sidebar" class="fixed inset-y-0 left-0 w-72 bg-gray-900 border-r border-gray-800 -translate-x-full transition-transform duration-300 ease-in-out z-50 overflow-y-auto">
+  <div class="pt-20 px-5 pb-10 flex flex-col min-h-full">
+    <h3 class="text-pink-600 font-semibold mb-4">Categories</h3>
+    <ul class="space-y-1 mb-10" id="sidebar-categories">
+      <li><a class="cat-item block py-2.5 px-3 rounded hover:bg-gray-800 cursor-pointer" data-category="All"><i class="fas fa-list-ul w-5 mr-3"></i>All</a></li>
+    </ul>
+
+    <h3 class="text-pink-600 font-semibold mb-4">Menu</h3>
+    <ul class="space-y-1 mb-auto">
+      <li><a onclick="toggleSidebar()" class="block py-2.5 px-3 rounded hover:bg-gray-800 cursor-pointer"><i class="fas fa-home w-5 mr-3"></i>Home</a></li>
+    </ul>
+  </div>
+</aside>
+
+<!-- Overlay -->
+<div id="overlay" class="fixed inset-0 bg-black/60 opacity-0 pointer-events-none transition-opacity duration-300 z-40"></div>
+
+<!-- Search Overlay -->
+<div id="search-overlay" class="hidden fixed inset-0 bg-black/95 z-50 flex-col items-center pt-24 px-4">
+  <div class="w-full max-w-xl relative mb-8">
+    <i class="fas fa-search absolute left-5 top-1/2 -translate-y-1/2 text-gray-400 text-xl"></i>
+    <input id="search-input" type="text" class="w-full pl-14 pr-14 py-4 bg-gray-800/80 border border-gray-700 rounded-full text-lg outline-none focus:border-pink-500 transition" placeholder="Search..." autocomplete="off">
+    <button onclick="closeSearchOverlay()" class="absolute right-5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white text-3xl transition">×</button>
+  </div>
+</div>
+
+<main class="pt-6 px-4 pb-16 max-w-7xl mx-auto">
+  <div id="status-message" class="hidden my-6 text-center"></div>
+
+  <div id="category-filters" class="flex flex-wrap justify-center gap-3 mb-10"></div>
+
+  <div id="content-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-5"></div>
+
+  <div id="pagination" class="flex flex-wrap justify-center gap-2 mt-10"></div>
+</main>
+
+<!-- Video Modal -->
+<div id="video-modal" class="fixed inset-0 bg-black/95 hidden items-center justify-center z-[9999] p-4">
+  <div class="relative w-full max-w-6xl aspect-video bg-black rounded-2xl overflow-hidden shadow-2xl">
+    <button onclick="closeVideoModal()" class="absolute top-4 right-4 z-20 bg-black/70 hover:bg-black/90 text-white w-12 h-12 rounded-full flex items-center justify-center text-2xl transition"><i class="fas fa-times"></i></button>
+    <div id="video-title" class="absolute bottom-4 left-4 z-20 bg-black/70 text-white px-4 py-2 rounded max-w-[70%] truncate"></div>
+    <div id="video-player" class="w-full h-full"></div>
+  </div>
+</div>
+
+</body>
+</html>
